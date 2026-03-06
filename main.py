@@ -17,21 +17,19 @@ def wave(amp: float, freq: float, phase: float, sample_number: np.ndarray, sampl
         np.ndarray: The values of the sine wave at the given sample numbers."""
     return amp * np.sin((2 * np.pi * freq * (sample_number / sample_rate)) + phase)
 
-def scheduler(state_duration: int, data: np.ndarray, current_step: int) -> bool:
-    total_duration = state_duration * len(data)
-    step_in_cycle = current_step % total_duration
-    state_index = step_in_cycle // state_duration
-    return data[state_index]
+def get_schedule(state_duration: int, data: np.ndarray, total_duration: int):
+    mark_list = list()
+    for current_step in range(total_duration):
+        step_in_cycle = current_step % total_duration
+        state_index = step_in_cycle // state_duration
+        if data[state_index]:
+            mark_list.append(1)
+        else:
+            mark_list.append(0)
+    mark_nparray = np.array(mark_list)
+    return mark_nparray, (1 - mark_nparray)
 
-
-
-def load_bits_from_file(file_path):
-    with open(file_path, 'rb') as f:
-        file_data = np.frombuffer(f.read(), dtype=np.uint8)
-        file_data = np.unpackbits(file_data)[:].astype(bool)
-    return file_data
-
-def generate_fsk_signal(sample_rate: int, mark_freq: int, space_freq: int, symbol_duration: int, total_duration: int, data: np.ndarray) -> tuple[np.ndarray, list[float]]:
+def generate_fsk_signal(sample_rate: int, mark_freq: int, space_freq: int, symbol_duration: int, total_duration: int, data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """ Generates an FSK modulated signal based on the provided parameters and input data.
 
     Args:
@@ -46,10 +44,23 @@ def generate_fsk_signal(sample_rate: int, mark_freq: int, space_freq: int, symbo
         tuple[np.ndarray, np.ndarray]: The time array and the modulated signal array.
     """
     t = np.arange(0, total_duration)
+    print("[~] Generating base waveforms for mark and space frequencies...")
     y1 = wave(1, mark_freq, 0, t, sample_rate)
     y2 = wave(.8, space_freq, 0, t, sample_rate)
-    signal_output = [(y1[i] if scheduler(symbol_duration, data, i) else y2[i]) for i in range(len(t))]
+    print("[+] Base waveforms generated!")
+    print("[~] Generating mark and space schedules based on input data...")
+    mark_schedule, space_schedule = get_schedule(symbol_duration, data, total_duration)
+    print("[+] Schedules generated!")
+    print("[~] Combining waveforms with schedules to create final FSK signal...")
+    signal_output = (y1 * mark_schedule) + (y2 * space_schedule)
+    print("[+] Final FSK signal created!")
     return t,signal_output
+
+def load_bits_from_file(file_path):
+    with open(file_path, 'rb') as f:
+        file_data = np.frombuffer(f.read(), dtype=np.uint8)
+        file_data = np.unpackbits(file_data)[:].astype(bool)
+    return file_data
 
 def generate_noise_for_signal(desired_snr, signal):
     noise = np.random.normal(0, 0.5, len(signal))

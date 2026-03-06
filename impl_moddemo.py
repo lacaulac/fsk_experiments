@@ -1,0 +1,88 @@
+import numpy as np
+import pandas as pd
+
+import fastgoertzel as fg
+
+SAMPLE_RATE = 44100
+DATA_AMOUNT = 100e3 # Amount of symbols/bits togenerate transmit
+SYMBOL_RATE = 300
+SYMBOL_DURATION = SAMPLE_RATE // SYMBOL_RATE
+TOTAL_DURATION = SYMBOL_DURATION * DATA_AMOUNT
+MAIN_FREQ = 2200
+OTHER_FREQ = 1200
+MIX_SNR_DB = 0
+
+DATA_AMOUNT = int(DATA_AMOUNT)
+
+print(f"Total duration in seconds: {TOTAL_DURATION / SAMPLE_RATE:.2f}")
+print(f"Total number of samples: {TOTAL_DURATION}")
+print(f"Symbols per second: {SYMBOL_RATE}")
+print(f"Samples per second: {SAMPLE_RATE}")
+print(f"Samples per symbol: {SYMBOL_DURATION}")
+print(f"Symbol amount: {DATA_AMOUNT}")
+
+print(f"[~] Generating {DATA_AMOUNT} random symbols...")
+data = np.random.choice([True, False], size=DATA_AMOUNT)
+print("[+] Data generation complete!")
+
+def wave(amp, freq, phase, x):
+    return amp * np.sin((2 * np.pi * freq * (x / SAMPLE_RATE)) + phase)
+
+def scheduler(state_duration: int, data, current_step):
+    total_duration = state_duration * len(data)
+    step_in_cycle = current_step % total_duration
+    state_index = step_in_cycle // state_duration
+    return data[state_index]
+
+print(f"[~] Generating FSK modulated signal")
+x = np.arange(0, TOTAL_DURATION)
+y1 = wave(1, MAIN_FREQ, 0, x)
+y2 = wave(.8, OTHER_FREQ, 0, x)
+y = [(y1[i] if scheduler(SYMBOL_DURATION, data, i) else y2[i]) for i in range(len(x))]
+print(f"[+] FSK modulated signal generated")
+
+print(f"[~] Generating noise and mixing with signal at SNR of {MIX_SNR_DB} dB")
+# Generate Gaussian noise for the duration of the signal
+noise = np.random.normal(0, 0.5, len(y))
+signal_power = np.mean(np.array(y)**2)
+noise_power = signal_power / (10**(MIX_SNR_DB / 10))
+noise = np.random.normal(0, np.sqrt(noise_power), len(y))
+noisy_signal = np.array(y) + noise
+#Normalize the noisy signal to be between -1 and 1
+noisy_signal = noisy_signal / np.max(np.abs(noisy_signal))
+noisy_y = noisy_signal.tolist()
+
+y = noisy_y
+
+print("[+] Noise generated and mixed with signal")
+
+print("[~] Analyzing signal with Goertzel algorithm...")
+BLOCK_SIZE = SYMBOL_DURATION//1
+result = list()
+for i in range(0, len(x), BLOCK_SIZE):
+    block = np.array(y[i:i+BLOCK_SIZE])
+    res = fg.goertzel(block, MAIN_FREQ/SAMPLE_RATE)
+    result.append(res[0])
+print("[+] Goertzel analysis complete!")
+
+print("[~] Post-processing Goertzel results...")
+# #Normalize the result to be between 0 and 1
+# result = result / np.max(result)
+# Get the top 97%
+threshold = np.percentile(result, 97)
+print(f"\t[+] 97th Percentile of Goertzel Result: {threshold:.2f}")
+result = result/threshold
+
+#"Normalise" the result to binary values
+detected = [1 if r > 0.5 else 0 for r in result] 
+print(f"[+] Post-processing complete!")
+
+print(f"[~] Computing decoded symbols from detected blocks...")
+# Average each detected block to get one value per symbol
+DETECTS_PER_STATE = len(result) // len(data)
+decoded = [True if sum(detected[i:i+DETECTS_PER_STATE]) > (DETECTS_PER_STATE // 2) else False for i in range(0, len(detected), DETECTS_PER_STATE)]
+print(f"[+] Fully decoded!")
+# Compute the bit error rate
+bit_errors = sum(d != o for d, o in zip(decoded, data))
+bit_error_rate = bit_errors / len(data)
+print(f"Bit error rate: {bit_error_rate:.2%} ({bit_errors} errors out of {len(data)} bits)")

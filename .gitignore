@@ -9,3 +9,7 @@ wheels/
 # Virtual environments
 .venv
 create
+
+tests.ipynb
+test*wav
+recovered*

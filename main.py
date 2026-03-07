@@ -4,6 +4,15 @@ from time import time
 import fastgoertzel as fg
 import numpy as np
 
+def add_preamble_to_data(data: list[bool], preamble_length: int) -> list[bool]:
+    """Adds a preamble of alternating bits to the beginning of the input data.
+    Args:
+        data (list[bool]): The original input data bits.
+        preamble_length (int): The length of the preamble in bits.
+    Returns:
+        list[bool]: The input data with the preamble added at the beginning."""
+    preamble = [i % 2 == 0 for i in range(preamble_length)]
+    return preamble + data
 
 def wave(amp: float,
          freq: float,
@@ -142,17 +151,17 @@ def postprocess_goertzel(goertzel_result) -> list[int]:
             the mark frequency in each block."""
     threshold = np.percentile(goertzel_result, 97)
     print(f"\t[+] 97th Percentile of Goertzel Result: {threshold:.2f}")
-    goertzel_result = goertzel_result/threshold  # type: ignore
+    processed_bits = goertzel_result/threshold  # type: ignore
 
     # "Normalise" the result to binary values
-    processed_bits = [1 if r > 0.5 else 0 for r in goertzel_result]
+    # processed_bits = [1 if r > 0.5 else 0 for r in processed_bits]
     return processed_bits
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="FSK Modem Demo")
     parser.add_argument('-s', '--sample-rate', type=int,
-                        default=44100, help='Sample rate in Hz')
+                        default=48000, help='Sample rate in Hz')
     parser.add_argument('-a', '--data-amount', type=int,
                         default=10000, help='Amount of symbols/bits to generate')
     parser.add_argument('-r', '--symbol-rate', type=int,
@@ -171,6 +180,8 @@ if __name__ == "__main__":
                         help='Path to input audio file (optional)')
     parser.add_argument('--output-audio', type=str,
                         help='Path to output audio file (optional)')
+    parser.add_argument('-p', '--preamble-length', type=int,
+                        help='Length of the preamble to add to the generated data')
     args = parser.parse_args()
     DATA_AMOUNT = args.data_amount
     SYMBOL_RATE = args.symbol_rate
@@ -181,6 +192,8 @@ if __name__ == "__main__":
     OUTPUT_FILE_PATH = args.output
     OUTPUT_AUDIO_PATH = args.output_audio
     INPUT_AUDIO_PATH = args.input_audio
+    FLAG_USE_PREAMBLE = args.preamble_length is not None
+    PREAMBLE_LENGTH = args.preamble_length
     start_time = time()
     if not INPUT_AUDIO_PATH:
         SAMPLE_RATE = args.sample_rate
@@ -189,6 +202,9 @@ if __name__ == "__main__":
         if INPUT_FILE_PATH:
             print(f"[~] Loading input data from {INPUT_FILE_PATH}...")
             input_data = load_bits_from_file(INPUT_FILE_PATH)
+            if FLAG_USE_PREAMBLE:
+                print(f"[~] Adding preamble of length {PREAMBLE_LENGTH} bits...")
+                input_data = np.array(add_preamble_to_data(list(input_data), PREAMBLE_LENGTH))
             DATA_AMOUNT = len(input_data)
             TOTAL_DURATION = SYMBOL_DURATION * DATA_AMOUNT
             print("[+] Input data loaded!")
@@ -203,6 +219,12 @@ if __name__ == "__main__":
         if not INPUT_FILE_PATH:
             print(f"[~] Generating {DATA_AMOUNT} random symbols...")
             input_data = np.random.choice([True, False], size=DATA_AMOUNT)
+            if FLAG_USE_PREAMBLE:
+                print(f"[~] Adding preamble of length {PREAMBLE_LENGTH} bits...")
+                input_data = np.array(add_preamble_to_data(list(input_data), PREAMBLE_LENGTH))
+                
+                DATA_AMOUNT = len(input_data)
+                TOTAL_DURATION = SYMBOL_DURATION * DATA_AMOUNT
             print("[+] Data generation complete!")
 
         print("[~] Generating FSK modulated signal")
@@ -257,8 +279,13 @@ if __name__ == "__main__":
     print("[~] Computing decoded symbols from detected blocks...")
     # Average each detected block to get one value per symbol
     DETECTS_PER_STATE = SYMBOL_DURATION // block_size
-    decoded = [(sum(detected[i:i+DETECTS_PER_STATE]) > (DETECTS_PER_STATE // 2))
-               for i in range(0, len(detected), DETECTS_PER_STATE)]
+    #decoded = [(sum(detected[i:i+DETECTS_PER_STATE]) > (DETECTS_PER_STATE // 2))
+    #           for i in range(0, len(detected), DETECTS_PER_STATE)]
+    decoded = []
+    for i in range(0, len(detected), DETECTS_PER_STATE):
+        block = detected[i:i+DETECTS_PER_STATE]
+        avg = sum(block) / len(block)
+        decoded.append(avg > 0.5)
     print("[+] Fully decoded!")
     if not INPUT_AUDIO_PATH:
         # Compute the bit error rate
@@ -268,6 +295,10 @@ if __name__ == "__main__":
               f" errors out of {len(input_data)} bits)")
     end_time = time()
     if OUTPUT_FILE_PATH:
+        # If there's a preamble, remove it from the decoded data before saving
+        if FLAG_USE_PREAMBLE:
+            print(f"[~] Removing preamble of length {PREAMBLE_LENGTH} bits from decoded data...")
+            decoded = decoded[PREAMBLE_LENGTH:]
         print(f"[~] Saving decoded data to {OUTPUT_FILE_PATH}...")
         with open(OUTPUT_FILE_PATH, 'wb') as f:
             BYTE_DATA = np.packbits(decoded).tobytes()
